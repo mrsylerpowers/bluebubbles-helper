@@ -387,7 +387,16 @@ BlueBubblesHelper *plugin;
         }
     // If the server tells us to send a message
     } else if ([event isEqualToString:@"send-message"]) {
-        [BlueBubblesHelper sendMessage:(data) transaction:(transaction)];
+        IMChat *chat = [BlueBubblesHelper getChat: data[@"chatGuid"] :transaction];
+        
+        NSString *effectId = nil;
+        if (data[@"effectId"] != [NSNull null] && [data[@"effectId"] length] != 0) {
+            effectId = data[@"effectId"];
+        }
+        
+        [BlueBubblesHelper pocMultiFileTransferToChat:chat effectId:effectId tranaction:transaction];
+      //  [BlueBubblesHelper sendMessage:(data) transaction:(transaction)];
+        
     // If the server tells us to create a chat
     // currently unused method
     } else if ([event isEqualToString:@"create-chat"]) {
@@ -519,6 +528,106 @@ BlueBubblesHelper *plugin;
         [[NetworkController sharedInstance] sendMessage: @{@"event": @"stopped-typing", @"guid": guid}];
         DLog(@"BLUEBUBBLESHELPER: %@ stopped typing", guid);
     }
+}
+/**
+ POC The app has to build a attrobuted body where text can be displayed anywhere and stack of images displayed anywhere
+ */
++(NSAttributedString*) buildAttributedStringForMultipleFileTransfers:(NSArray*)fileTransfers  withText:(NSString*)text{
+    
+    NSMutableString *textBody = [[NSMutableString alloc] init];
+    
+    // For every file transfer add the object-replacment-char
+    for (int i = 0; i < [fileTransfers count]; i++) {
+        // First parts
+        [textBody appendString:@"\ufffc"];
+    
+    }
+    
+    // If there is a text we want to add in the POC add it to the last message
+    if(text !=nil){
+        // Last part
+        [textBody appendString:text];
+        
+    }
+    
+    NSMutableAttributedString * attributedString = [[NSMutableAttributedString alloc] initWithString:textBody ];
+    
+    // Keep track of ranges and parts
+    int currentPart = 0;
+    int rangeIndex = 0;
+    
+    // Attribute the object replacement chars
+    for (IMFileTransfer* transfer in fileTransfers) {
+       
+            NSDictionary *dictonary = @{
+                @"__kIMBaseWritingDirectionAttributeName" : @"-1", // Maybe not required?
+                @"__kIMFileTransferGUIDAttributeName": [transfer guid] ,
+                @"__kIMFilenameAttributeName": [transfer filename],
+//                @"__kIMInlineMediaHeightAttributeName" : @"0",
+//                @"__kIMInlineMediaWidthAttributeName": @"0",
+                @"__kIMMessagePartAttributeName": [NSNumber numberWithInt:currentPart]
+            };
+            
+            // Object Replacment Chars allways are only 1 char long
+            NSRange range = NSMakeRange(rangeIndex, 1);
+        
+            [attributedString addAttributes:dictonary range:range];
+            rangeIndex++;
+            currentPart++;
+    }
+    
+    // Attribute the Text Body
+    if(text){
+        NSDictionary *dictonary = @{
+            @"__kIMBaseWritingDirectionAttributeName" : @"-1", // Maybe not required?
+            @"__kIMMessagePartAttributeName": [NSNumber numberWithInt:currentPart]
+        };
+        
+        NSRange range = NSMakeRange(rangeIndex, [text length] );
+        [attributedString addAttributes:dictonary range:range];
+        rangeIndex+= [text length];
+        currentPart++;
+    }
+    
+    return attributedString;
+    
+}
++(void) pocMultiFileTransferToChat:(IMChat*)chat effectId:(NSString*)effectId tranaction:(NSString* ) transaction{
+    
+    // Select any number of file you want or have to insert into final message: Custom Test varibles ***DO!! EDIT***
+    NSURL * sendingFile1 = [NSURL fileURLWithPath:@"/Users/justk/Documents/d-me-05682.jpg"];
+    NSURL * sendingFile2 = [NSURL fileURLWithPath:@"/Users/justk/Library/Messages/d-me-05682 copy.jpg"];
+    NSArray * files = [NSArray arrayWithObjects:sendingFile1,sendingFile2, nil];
+    NSMutableArray * transfers = [NSMutableArray arrayWithCapacity:2];
+    NSMutableArray * fileTransferGUIDs = [NSMutableArray arrayWithCapacity:2];
+    // End of custom test varibles
+    
+    // Section Simulates running On APP requesting for file transfers
+    for (NSURL* file in files) {
+        IMFileTransfer * transfer = [self prepareFileTransferForAttachment:file filename:[file lastPathComponent]];
+        if (transfer != nil){
+            [transfers addObject:transfer];
+            [fileTransferGUIDs addObject:[transfer guid]];
+        }
+    }
+    // End Section
+    
+    // Simulates app building attributed string ( without runs )
+    NSAttributedString* attributedString = [BlueBubblesHelper buildAttributedStringForMultipleFileTransfers:transfers withText:@"Hi Tanay"];
+    
+    // Since I am not modifying data I am just using the same code for
+    DLog(@"BLUEBUBBLESHELPERF: Attributed string with transfers: %@ %@",attributedString, transfers);
+    void (^createMessage)(NSAttributedString*,NSString*, NSArray* , NSString*) = ^(NSAttributedString *message,  NSString *effectId, NSArray* fileTransferGuids,NSString *threadIdentifier) {
+        IMMessage *messageToSend = [[IMMessage alloc] init];
+        messageToSend = [messageToSend initWithSender:(nil) time:(nil) text:(message) messageSubject:(nil) fileTransferGUIDs:(nil) flags:(100005) error:(nil) guid:(nil) subject:(nil) balloonBundleID:(nil) payloadData:(nil) expressiveSendStyleID:(effectId)];
+        [chat sendMessage:(messageToSend)];
+        if (transaction != nil) {
+            [[NetworkController sharedInstance] sendMessage: @{@"transactionId": transaction, @"identifier": [[chat lastFinishedMessage] guid]}];
+        }
+    };
+
+    createMessage(attributedString, effectId, fileTransferGUIDs, nil);
+    
 }
 
 +(void) sendFileTransferToChat:(IMChat*)chat filePath:(NSString* )originFilePath  effectId:(NSString *) effectId transaction:(NSString*)transaction{
