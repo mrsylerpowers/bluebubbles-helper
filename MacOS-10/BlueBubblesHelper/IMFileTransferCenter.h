@@ -29,7 +29,7 @@
 - (void)_daemonRestarted:(id)arg1;
 - (void)_initiateHighQualityVariantDownloadWithDaemonForGUID:(id)arg1;
 - (void)_fetchHighQualityVariantForTransferGUID:(id)arg1 completion:(id)arg2;
-- (void)fetchHighQualityVariantForTransfer:(id)arg1 completion:(id)arg2;
+- (void)fetchHighQualityVariantForTransfer:(id)arg1 completion:(void(^)(void))arg2;
 - (id)guidsForStoredAttachmentPayloadData:(id)arg1 messageGUID:(id)arg2;
 - (void)setAuxVideoForTransfer:(id)arg1 value:(BOOL)arg2;
 - (void)setAuxImageForTransfer:(id)arg1 value:(BOOL)arg2;

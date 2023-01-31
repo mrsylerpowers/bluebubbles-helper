@@ -31,6 +31,11 @@
 #import "IMHandleRegistrar.h"
 #import "IMChatHistoryController.h"
 #import "IMChatItem.h"
+#import "IDS/IDSIDQueryController.h"
+#import "SocialAppsCore/SOAccountRegistrationController.h"
+#import "SocialAppsCore/SOAccountAliasController.h"
+#import "SocialAppsCore/SOAccountAlias.h"
+//#import "MSMessageTemplateLayout.h"
 
 @interface BlueBubblesHelper : NSObject
 + (instancetype)sharedInstance;
@@ -93,6 +98,133 @@ BlueBubblesHelper *plugin;
         [plugin initializeNetworkController];
     });
 }
++(void) getAllTransferInfoForGUID:(NSString*)guid{
+    
+    IMFileTransfer * newTransfer = [[IMFileTransferCenter sharedInstance] transferForGUID:guid];
+    
+    DLog(@"BLUEBUBBLESHELPERFT:Sticker User info %@, Is a sticker? %hhd, Is recipeBasedSticker?  %hhd ", newTransfer.stickerUserInfo, newTransfer.isSticker, newTransfer.isRecipeBasedSticker);
+    DLog(@"BLUEBUBBLESHELPERFT:AUX Info %@, Attribution info? %@", newTransfer.AuxTranscoderUserInfo, newTransfer.attributionInfo);
+    
+}
+/**
+ Starts the listener for alias status changes
+ */
++(void) registerListenerForActiveAliasChanged {
+    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(_aliasesChanged:) name:@"IMAccountAliasesChangedNotification" object:nil];
+    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(_aliasesChanged:) name:@"SOAccountAliasesChangedNotification_Private" object:nil];
+}
+/**
+ Internal reaction to notifications about aliases
+ @param notification the object inside of the notification will allways be a IMAccount
+ */
++(void)_aliasesChanged:  (NSNotification *)notification{
+    SOAccountAliasController * account = notification.object;
+    
+    NSArray* currentAliases = [BlueBubblesHelper getVettedAliases];
+    DLog(@"BLUEBUBBLESHELPERFT: Aliases Changed %@", currentAliases);
+    [[NetworkController sharedInstance] sendMessage: @{@"event": @"aliases-updated", @"aliases": currentAliases}];
+ 
+    
+}
+/**
+ Get the account enabled state
+ @return True if the account enabled state is 4 or false if else or not signed in
+ */
++(BOOL) isAccountEnabled {
+    SOAccountRegistrationController* registrationController = [SOAccountRegistrationController registrationController];
+    
+    if (registrationController!=NULL && [registrationController isSignedIn]){
+        
+        long long enabledState = [registrationController enabledState];
+        NSLog(@"BLUEBUBBLESHELPER: Account Enabled State %lld", enabledState);
+        return enabledState == 4;
+    
+    } else {
+        return FALSE;
+    }
+    
+    return [registrationController isSignedIn];
+}
+/**
+  Gets the active alias associated with the signed account
+  @return The active alias's names if not logged in returns a empty list
+  */
++(NSArray *) getVettedAliases {
+    
+    if ([self isAccountEnabled]) {
+        SOAccountRegistrationController* registrationController = [SOAccountRegistrationController registrationController];
+        SOAccountAliasController * aliasController = [registrationController aliasController];
+        
+        NSArray* activeAliases = [aliasController vettedAliases];
+        NSLog(@"BLUEBUBBLESHELPER: Vetted Aliases %@", activeAliases);
+        
+        
+        NSMutableArray *returnedAliases = [[NSMutableArray  alloc] init];
+        
+        for (SOAccountAlias* alias in activeAliases) {
+           
+            [returnedAliases addObject:@{@"name":[alias name],@"active":[NSNumber numberWithBool:[alias active]]}];
+        }
+        
+        return returnedAliases;
+        
+    } else {
+        
+        DLog(@"BLUEBUBBLESHELPER: Can't get aliases account not enabled");
+        return @[];
+        
+    }
+    
+}
+/**
+ Deactivates Alias
+ */
++(BOOL) deactiveAliasForName:(NSString * ) aliasName {
+    
+    if ([self isAccountEnabled]) {
+        
+    SOAccountRegistrationController* registrationController = [SOAccountRegistrationController registrationController];
+    SOAccountAliasController * aliasController = [registrationController aliasController];
+        @try {
+            SOAccountAlias * aliasToDisable = [aliasController aliasForName:aliasName];
+            DLog(@"BLUEBUBBLESHELPER: Deactivating Alias %@", aliasToDisable);
+            [aliasController deactivateAliases:@[aliasToDisable]];
+            return true;
+        } @catch (NSException *exception) {
+            DLog(@"BLUEBUBBLESHELPER: No alias found with name %@", aliasName);
+            return false;
+        }
+    } else {
+        
+        DLog(@"BLUEBUBBLESHELPER: Can't disable alias, account not enabled");
+        return false;
+    }
+}
+
+/**
+ Activate Alias
+ */
++(BOOL) activativateAliasForName:(NSString * ) aliasName {
+    
+    if ([self isAccountEnabled]) {
+        
+    SOAccountRegistrationController* registrationController = [SOAccountRegistrationController registrationController];
+    SOAccountAliasController * aliasController = [registrationController aliasController];
+        @try {
+            SOAccountAlias * aliasToActivate = [aliasController aliasForName:aliasName];
+            DLog(@"BLUEBUBBLESHELPER: Activateing Alias %@", aliasToActivate);
+            [aliasToActivate activate];
+            return true;
+        } @catch (NSException *exception) {
+            DLog(@"BLUEBUBBLESHELPER: No alias found with name %@", aliasName);
+            return false;
+        }
+    } else {
+        
+        DLog(@"BLUEBUBBLESHELPER: Can't activate alias, account not enabled");
+        return false;
+    }
+}
 /**
  Creates a new file transfer & moves file to attachment location
 
@@ -109,7 +241,7 @@ BlueBubblesHelper *plugin;
 
     // Creates the initial transfer object but does nothing atm
     IMFileTransfer * newTransfer = [[IMFileTransferCenter sharedInstance] transferForGUID:transferInitGuid];
-
+    
     // Get location of where attachments should be placed
     NSString* persistentPath = [[IMDPersistentAttachmentController sharedInstance] _persistentPathForTransfer:newTransfer filename:filename highQuality:TRUE];
 
@@ -394,8 +526,8 @@ BlueBubblesHelper *plugin;
             effectId = data[@"effectId"];
         }
         
-        [BlueBubblesHelper pocMultiFileTransferToChat:chat effectId:effectId tranaction:transaction];
-      //  [BlueBubblesHelper sendMessage:(data) transaction:(transaction)];
+        //[BlueBubblesHelper pocMultiFileTransferToChat:chat effectId:effectId tranaction:transaction];
+        [BlueBubblesHelper sendMessage:(data) transaction:(transaction)];
         
     // If the server tells us to create a chat
     // currently unused method
@@ -429,6 +561,52 @@ BlueBubblesHelper *plugin;
             [[IMChatRegistry sharedInstance] _chat_remove:(chat)];
             if (transaction != nil) {
                 [[NetworkController sharedInstance] sendMessage: @{@"transactionId": transaction}];
+            }
+        }
+    } else if ([event isEqualToString:@"vetted-alias"]) {
+        
+        NSArray* aliasNames = [BlueBubblesHelper getVettedAliases];
+        
+        if (transaction != nil) {
+            [[NetworkController sharedInstance] sendMessage: @{@"transactionId": transaction, @"identifier": aliasNames}];
+        }
+    } else if ([event isEqualToString:@"register-alias-listener"]) {
+        
+        [BlueBubblesHelper registerListenerForActiveAliasChanged];
+        
+        if (transaction != nil) {
+            [[NetworkController sharedInstance] sendMessage: @{@"transactionId": transaction}];
+        }
+    } else if ([event isEqualToString:@"deactivate-alias"]) {
+        
+        NSString * alias = data[@"alias"];
+        BOOL successfullDeactivation = [BlueBubblesHelper deactiveAliasForName:alias];
+        if (successfullDeactivation){
+        
+            if (transaction != nil) {
+                [[NetworkController sharedInstance] sendMessage: @{@"transactionId": transaction}];
+            }
+            
+        } else {
+            if (transaction != nil) {
+                [[NetworkController sharedInstance] sendMessage: @{@"transactionId": transaction, @"error": @"Unable to deactivate alias"}];
+            }
+        }
+    } else if ([event isEqualToString:@"activate-alias"]) {
+        NSString * alias = data[@"alias"];
+        
+        BOOL successfullActivation = [BlueBubblesHelper activativateAliasForName:alias];
+        
+        if (successfullActivation){
+        
+            if (transaction != nil) {
+                [[NetworkController sharedInstance] sendMessage: @{@"transactionId": transaction}];
+            }
+            
+        } else {
+            
+            if (transaction != nil) {
+                [[NetworkController sharedInstance] sendMessage: @{@"transactionId": transaction, @"error": @"Unable to activate alias"}];
             }
         }
     } else if ([event isEqualToString:@"send-attachment"]) {
@@ -643,8 +821,8 @@ BlueBubblesHelper *plugin;
 
             IMMessage *messageToSend = [[IMMessage alloc] init];
             messageToSend = [messageToSend initWithSender:(nil) fileTransfer:fileTransfer];
-
             messageToSend.expressiveSendStyleID = effectId;
+            [messageToSend _updateFlags:18874369];
             [chat sendMessage:(messageToSend)];
             DLog(@"BLUEBUBBLESHELPER: Sent Transfer: %@", transfer);
             if (transaction != nil) {
@@ -712,8 +890,87 @@ BlueBubblesHelper *plugin;
     createMessage(attributedString, subjectAttributedString, effectId, nil, fileTransfersGUIDs);
 }
 
-@end
++(void)parsePayloadData:(NSData*) payloadData{
+    NSSet * classesToUnarchive = [NSSet setWithObjects:[NSMutableString self],[NSMutableString self],[NSString self], [NSMutableDictionary self],[NSDictionary self],[NSUUID self],[NSData self],[NSURL self],[NSMutableData self],[NSValue self],[NSNumber self], nil];
+    NSError * cerialError;
+    
+     NSDictionary * objects=   [NSKeyedUnarchiver unarchivedObjectOfClasses:classesToUnarchive fromData:payloadData error:&cerialError];
+    if (cerialError == nil){
+        DLog(@"BLUEBUBBLESHELPERPD: Payload Data: %@ ", objects);
+        NSURL * urlString = objects[@"URL"];
+        if (urlString!=nil){
+        DLog(@"BLUEBUBBLESHELPERPD: Payload Data URL: %@ ", objects[@"URL"]);
+            DLog(@"BLUEBUBBLESHELPERPD: Payload Data URL: %@", [urlString absoluteString]);
+            DLog(@"BLUEBUBBLESHELPERPD: Payload Data URL Components: %@", [[NSURLComponents init] initWithString:[urlString absoluteString]]);
 
+        }
+    } else{
+        DLog(@"BLUEBUBBLESHELPERPD: Failed To Deserialize: %@ ", cerialError);
+    }
+  
+}
+@end
+ZKSwizzleInterface(FTI_IDSIDQueryController, IDSIDQueryController, NSObject)
+@implementation FTI_IDSIDQueryController
+
+-(BOOL) refreshIDStatusForDestinations:(id)arg1 service:(id)arg2 listenerID:(id)arg3 queue:(id)arg4 completionBlock:(void(^)(id arg6))arg5{
+    NSString* lisstenerId = arg3;
+   
+    if ([lisstenerId isEqualToString: @"AudioCallViewControllerIDSListener"]){
+        NSLog(@"FT-INTERFACE: Refreshing Status of Contact for video calling %@, %@,%@,%@", arg1, arg2,arg3,arg4);
+    }else{
+        NSLog(@"FT-INTERFACE: Refreshing Status of Contact %@, %@,%@,%@", arg1, arg2,arg3,arg4);
+    }
+    return  ZKOrig(bool, arg1,arg2,arg3,arg4, arg5 );
+};
+- (BOOL)requestIDStatusForDestination:(id)arg1 service:(id)arg2 listenerID:(id)arg3 queue:(id)arg4 completionBlock:(void(^)(id arg6))arg5{
+    NSString* lisstenerId = arg3;
+    if ([lisstenerId isEqualToString: @"AudioCallViewControllerIDSListener"]){
+        NSLog(@"FT-INTERFACE: Requesting Status of Contact for video calling %@, %@,%@,%@", arg1, arg2,arg3,arg4);
+    }else{
+        NSLog(@"FT-INTERFACE: Requesting Status of Contact %@, %@,%@,%@", arg1, arg2,arg3,arg4);
+    }
+    return  ZKOrig(bool, arg1,arg2,arg3,arg4, arg5 );
+}
+- (BOOL)refreshIDStatusForDestination:(void(^)(void))arg1 service:(id)arg2 listenerID:(id)arg3 queue:(id)arg4 completionBlock:(void(^)(void))arg5{
+    NSString* lisstenerId = arg3;
+    if ([lisstenerId isEqualToString: @"AudioCallViewControllerIDSListener"]){
+        NSLog(@"FT-INTERFACE: Refreshing Status of Contact for video calling %@, %@,%@,%@", arg1, arg2,arg3,arg4);
+    }else{
+        NSLog(@"FT-INTERFACE: Refreshing Status of Contact %@, %@,%@,%@", arg1, arg2,arg3,arg4);
+    }
+    return  ZKOrig(bool, arg1,arg2,arg3,arg4, arg5 );
+}
+- (BOOL)requestIDStatusForDestinations:(id)arg1 service:(id)arg2 listenerID:(id)arg3 queue:(id)arg4 completionBlock:(void(^)(void))arg5{
+    NSString* lisstenerId = arg3;
+   
+    if ([lisstenerId isEqualToString: @"AudioCallViewControllerIDSListener"]){
+        NSLog(@"FT-INTERFACE: Requesting Status of Contact for video calling %@, %@,%@,%@", arg1, arg2,arg3,arg4);
+    }else{
+        NSLog(@"FT-INTERFACE: Requesting Status of Contact %@, %@,%@,%@", arg1, arg2,arg3,arg4);
+    }
+    return  ZKOrig(bool, arg1,arg2,arg3,arg4, arg5 );
+}
+- (BOOL)currentIDStatusForDestination:(id)arg1 service:(id)arg2 listenerID:(id)arg3 queue:(id)arg4 completionBlock:(void(^)(id arg7))arg5{
+    NSString* lisstenerId = arg3;
+    if ([lisstenerId isEqualToString: @"AudioCallViewControllerIDSListener"]){
+        NSLog(@"FT-INTERFACE: Getting Current Status of Contact for video calling %@, %@,%@,%@", arg1, arg2,arg3,arg4);
+    }else{
+        NSLog(@"FT-INTERFACE: Getting Current Status of Contact %@, %@,%@,%@", arg1, arg2,arg3,arg4);
+    }
+    return  ZKOrig(bool, arg1,arg2,arg3,arg4, arg5 );
+}
+- (BOOL)currentIDStatusForDestinations:(id)arg1 service:(id)arg2 listenerID:(id)arg3 queue:(id)arg4 completionBlock:(void(^)(id arg7))arg5{
+    NSString* lisstenerId = arg3;
+    if ([lisstenerId isEqualToString: @"AudioCallViewControllerIDSListener"]){
+        NSLog(@"FT-INTERFACE: Getting Current Status of Contact for video calling %@, %@,%@,%@", arg1, arg2,arg3,arg4);
+    }else{
+        NSLog(@"FT-INTERFACE: Getting Current Status of Contact %@, %@,%@,%@", arg1, arg2,arg3,arg4);
+    }
+    return  ZKOrig(bool, arg1,arg2,arg3,arg4, arg5 );
+}
+
+@end
 
 // Credit to w0lf
 // Handles all of the incoming typing events
@@ -812,6 +1069,129 @@ ZKSwizzleInterface(BBH_IMMessageItem, IMMessageItem, NSObject)
 
 @end
 
+// Credit to mrsylerpowers
+// Handles all events
+ZKSwizzleInterface(BBH_IMChat, IMChat, NSObject)
+@implementation BBH_IMChat
+
+- (BOOL)_handleIncomingItem:(id)arg1 {
+    IMMessageItem* imMessageItem = arg1;
+    IMMessage *imMessage = [imMessageItem message];
+    //Complete the normal functions like writing to database and everything
+    BOOL isSystemMessage = [imMessageItem isSystemMessage];
+    if(isSystemMessage)
+    DLog(@"BLUEBUBBLESHELPER: Recieved System Message ");
+
+    BOOL isIncomingTypingOrCancel = [imMessageItem isIncomingTypingOrCancelTypingMessage];
+    BOOL isTypingMessageOrCancel  = [imMessageItem isTypingOrCancelTypingMessage];
+    if(isIncomingTypingOrCancel){
+        
+        BOOL incomingTypingMessage = [imMessageItem isIncomingTypingMessage];
+    if(incomingTypingMessage){
+        DLog(@"BLUEBUBBLESHELPER: Incoming Typing Message.....");
+        [[NetworkController sharedInstance] sendMessage: @{@"event": @"started-typing", @"guid": [imMessage guid]}];
+    }else{
+        DLog(@"BLUEBUBBLESHELPER: Incoming Cancel Typing Message");
+        [[NetworkController sharedInstance] sendMessage: @{@"event": @"stopped-typing", @"guid": [imMessage guid]}];
+        DLog(@"BLUEBUBBLESHELPER: %@ stopped typing", [imMessage guid]);
+    }
+        
+    }
+    if (isTypingMessageOrCancel){
+        
+            BOOL cancelTypingMessage = [imMessageItem isCancelTypingMessage];
+        if(cancelTypingMessage){
+            DLog(@"BLUEBUBBLESHELPER: Cancel typing");
+            
+            [[NetworkController sharedInstance] sendMessage: @{@"event": @"stopped-typing", @"guid": [imMessage guid]}];
+            DLog(@"BLUEBUBBLESHELPER: %@ stopped typing", [imMessage guid]);
+        }else{
+            DLog(@"BLUEBUBBLESHELPER: Typing...");
+            [[NetworkController sharedInstance] sendMessage: @{@"event": @"started-typing", @"guid": [imMessage guid]}];
+        }
+    }
+    //Complete the normal functions like writing to database and everything
+    BOOL hasBeenHandled = ZKOrig(BOOL, arg1);
+    if (!(isTypingMessageOrCancel || isIncomingTypingOrCancel)){
+        for (NSString *fileTransferGUID in [imMessage fileTransferGUIDs]) {
+            [BlueBubblesHelper getAllTransferInfoForGUID:fileTransferGUID];
+        }
+    DLog(@"BLUEBUBBLESHELPER: Recieved Message Update From Listener %@" ,[imMessageItem message] );
+        NSData * payloadData = [imMessage payloadData];
+        if (payloadData!= nil){
+            DLog(@"BLUEBUBBLESHELPERPD: Recieved Payload Data");
+            [BlueBubblesHelper parsePayloadData:payloadData];
+        }
+    [[NetworkController sharedInstance] sendMessage: @{@"event": @"message-update", @"guid": [[imMessageItem message] guid]}];
+    }
+    return hasBeenHandled;
+
+}
+
+@end
+
+
+ZKSwizzleInterface(BBH_IMMessage, IMMessage, NSObject)
+@implementation BBH_IMMessage
+
+- (id)initWithSender:(id)arg1 fileTransfer:(id)arg2{
+    id returnItem = ZKOrig(id, arg1,arg2);
+  
+        [BlueBubblesHelper getAllTransferInfoForGUID:([arg2 guid])];
+    
+    DLog(@"BLLUEBUBBLESHELPERM: Init with sender fileTransfer1 %@ : %@, %@",returnItem, arg1, arg2);
+    return returnItem;
+}
+- (id)initWithSender:(id)arg1 time:(id)arg2 text:(id)arg3 messageSubject:(id)arg4 fileTransferGUIDs:(id)arg5 flags:(unsigned long long)arg6 error:(id)arg7 guid:(id)arg8 subject:(id)arg9 associatedMessageGUID:(id)arg10 associatedMessageType:(long long)arg11 associatedMessageRange:(struct _NSRange)arg12 messageSummaryInfo:(id)arg13{
+    id returnItem = ZKOrig(id, arg1,arg2, arg3, arg4, arg5, arg6,arg7, arg8, arg9, arg10, arg11, arg12, arg13);
+    for (NSString *fileTransferGUID in  arg5) {
+        [BlueBubblesHelper getAllTransferInfoForGUID:fileTransferGUID];
+    }
+    DLog(@"BLLUEBUBBLESHELPERM: Init with sender fileTransfer2 %@ : %@, %@, %@, %@, %@, %llu, %@, %@, %@, %@, %lld, %@, %@",returnItem, arg1,arg2, arg3, arg4, arg5, arg6,arg7, arg8, arg9, arg10, arg11, arg12, arg13);
+    return returnItem;
+    
+}
+- (id)initWithSender:(id)arg1 time:(id)arg2 text:(id)arg3 messageSubject:(id)arg4 fileTransferGUIDs:(id)arg5 flags:(unsigned long long)arg6 error:(id)arg7 guid:(id)arg8 subject:(id)arg9 balloonBundleID:(id)arg10 payloadData:(id)arg11 expressiveSendStyleID:(id)arg12{
+    id returnItem = ZKOrig(id, arg1,arg2, arg3, arg4, arg5, arg6,arg7, arg8, arg9, arg10, arg11, arg12);
+    for (NSString *fileTransferGUID in  arg5) {
+        [BlueBubblesHelper getAllTransferInfoForGUID:fileTransferGUID];
+    }
+    DLog(@"BLLUEBUBBLESHELPERM: Init with sender fileTransfer3 %@ : %@, %@, %@, %@, %@, %llu, %@, %@, %@, %@, %@, %@",returnItem, arg1,arg2, arg3, arg4, arg5, arg6,arg7, arg8, arg9, arg10, arg11, arg12);
+    return returnItem;
+}
+- (id)initWithSender:(id)arg1 time:(id)arg2 text:(id)arg3 fileTransferGUIDs:(id)arg4 flags:(unsigned long long)arg5 error:(id)arg6 guid:(id)arg7 subject:(id)arg8{
+    id returnItem = ZKOrig(id, arg1,arg2, arg3, arg4, arg5, arg6,arg7, arg8);
+    for (NSString *fileTransferGUID in  arg4) {
+        [BlueBubblesHelper getAllTransferInfoForGUID:fileTransferGUID];
+    }
+    DLog(@"BLLUEBUBBLESHELPERM: Init with sender fileTransfer4 Text: %@ %@, %llu, %@,", arg3, arg4, arg5, arg6);
+    return returnItem;
+}
+- (id)initWithSender:(id)arg1 time:(id)arg2 text:(id)arg3 messageSubject:(id)arg4 fileTransferGUIDs:(id)arg5 flags:(unsigned long long)arg6 error:(id)arg7 guid:(id)arg8 subject:(id)arg9{
+    id returnItem = ZKOrig(id, arg1,arg2, arg3, arg4, arg5, arg6,arg7, arg8, arg9);
+    DLog(@"BLLUEBUBBLESHELPERM: Init with sender fileTransfer5 %@ : %@, %@, %@, \"\n%@\n\", %@, %llu, %@, %@, %@",returnItem, arg1,arg2, arg3, arg4, arg5, arg6,arg7, arg8, arg9);
+    for (NSString *fileTransferGUID in  arg5) {
+        [BlueBubblesHelper getAllTransferInfoForGUID:fileTransferGUID];
+    }
+    return returnItem;
+}
+//- (id)_initWithSender:(id)arg1 time:(id)arg2 timeRead:(id)arg3 timeDelivered:(id)arg4 timePlayed:(id)arg5 plainText:(id)arg6 text:(id)arg7 messageSubject:(id)arg8 fileTransferGUIDs:(id)arg9 flags:(unsigned long long)arg10 error:(id)arg11 guid:(id)arg12 messageID:(long long)arg13 subject:(id)arg14 balloonBundleID:(id)arg15 payloadData:(id)arg16 expressiveSendStyleID:(id)arg17 timeExpressiveSendPlayed:(id)arg18 associatedMessageGUID:(id)arg19 associatedMessageType:(long long)arg20 associatedMessageRange:(struct _NSRange)arg21 messageSummaryInfo:(id)arg22{
+//    id returnItem = ZKOrig(id, arg1,arg2, arg3, arg4, arg5, arg6,arg7, arg8, arg9, arg10, arg11, arg12, arg13, arg14, arg15, arg16, arg17, arg18, arg19, arg20, arg21, arg22);
+//    DLog(@"Init with sender fileTransfer %@ :%@, %@, %@, %@, %@, %llu, %@, %@, %@, %@, %lld, %@, %@, %@, %@, %@, %@, %@, %@, %@, %@, %@",returnItem, arg1,arg2, arg3, arg4, arg5, arg6,arg7, arg8, arg9, arg10, arg11, arg12, arg13, arg14, arg15, arg16, arg17, arg18, arg19, arg20, arg21, arg22);
+//    return returnItem;
+//}
+//- (id)_copyWithFlags:(unsigned long long)arg1;
+//- (id)copyWithZone:(struct _NSZone *)arg1;
+//- (id)descriptionForPurpose:(long long)arg1 inChat:(id)arg2 senderDisplayName:(id)arg3;
+//- (id)descriptionForPurpose:(long long)arg1 inChat:(id)arg2;
+//- (id)descriptionForPurpose:(long long)arg1;
+- (id)initWithSender:(id)arg1 time:(id)arg2 text:(id)arg3 messageSubject:(id)arg4 fileTransferGUIDs:(id)arg5 flags:(unsigned long long)arg6 error:(id)arg7 guid:(id)arg8 subject:(id)arg9 associatedMessageGUID:(id)arg10 associatedMessageType:(long long)arg11 associatedMessageRange:(struct _NSRange)arg12 associatedMessageInfo:(id)arg13{
+    id returnItem = ZKOrig(id, arg1,arg2, arg3, arg4, arg5, arg6,arg7, arg8, arg9, arg10, arg11, arg12, arg13);
+    DLog(@"BLLUEBUBBLESHELPERM: Init with sender fileTransfer6 %@ : %@, %@, %@, %@, %@, %llu, %@, %@, %@, %@, %lld, %@, %@",returnItem, arg1,arg2, arg3, arg4, arg5, arg6,arg7, arg8, arg9, arg10, arg11, arg12, arg13);
+    return returnItem;
+}
+
+@end
 //ZKSwizzleInterface(WBWT_IMChat, IMChat, NSObject)
 //@implementation WBWT_IMChat
 //-(void)_setDisplayName:(id)arg1 {
